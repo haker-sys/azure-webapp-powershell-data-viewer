@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PowerShell Data Viewer</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #333;
+            color: white;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+
+        .export-button {
+            padding: 10px 16px;
+            background-color: #333;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 14px;
+            margin-right: 5px;
+        }
+
+        .export-button:hover {
+            background-color: #555;
+        }
+
+        #status {
+            margin-top: 15px;
+            color: #555;
+            font-size: 14px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>PowerShell Data Viewer</h1>
+
+    <button class="export-button" onclick="exportCSV()">Export CSV</button>
+
+    <button class="export-button" onclick="exportXLSX()">Export XLSX</button>
+	
+	<button class="export-button" onclick="clearData()">Clear</button>
+
+    <div id="status">Connecting to server...</div>
+
+    <table>
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"></tbody>
+    </table>
+
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+
+    <script>
+        let receivedData = [];
+
+        // Use relative URL so it works on Azure
+        const API_URL = '/data';
+
+        async function getData() {
+
+            const status = document.getElementById('status');
+
+            try {
+
+                const response = await fetch(API_URL);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                receivedData = data;
+
+                status.textContent =
+                    `Connected | ${data.length} records | Last updated: ${new Date().toLocaleTimeString()}`;
+
+                const tableHead = document.getElementById('tableHead');
+                const tableBody = document.getElementById('tableBody');
+
+                // Clear existing table
+                tableHead.innerHTML = '';
+                tableBody.innerHTML = '';
+
+                // Nothing received yet
+                if (data.length === 0) {
+                    return;
+                }
+
+                // Get column names from object properties
+                const columns = [...new Set(
+                    data.flatMap(item => Object.keys(item))
+                )];
+
+                // Generate table headers
+                const headerRow = document.createElement('tr');
+
+                columns.forEach(column => {
+                    const th = document.createElement('th');
+                    th.textContent = column;
+                    headerRow.appendChild(th);
+                });
+
+                tableHead.appendChild(headerRow);
+
+                // Generate table rows
+                data.forEach(item => {
+
+                    const row = document.createElement('tr');
+
+                    columns.forEach(column => {
+
+                        const cell = document.createElement('td');
+
+                        cell.textContent = item[column] ?? '';
+
+                        row.appendChild(cell);
+                    });
+
+                    tableBody.appendChild(row);
+                });
+
+            } catch (error) {
+
+                console.error('Error retrieving data:', error);
+
+                status.textContent =
+                    'Unable to connect to server. Retrying...';
+
+            }
+        }
+
+        // Export data to CSV
+        function exportCSV() {
+
+            if (receivedData.length === 0) {
+                alert('No data available to export.');
+                return;
+            }
+
+            const columns = [...new Set(
+                receivedData.flatMap(item => Object.keys(item))
+            )];
+
+            function escapeCSV(value) {
+                const text = String(value ?? '');
+                return '"' + text.replace(/"/g, '""') + '"';
+            }
+
+            const rows = [
+                columns.map(escapeCSV).join(',')
+            ];
+
+            receivedData.forEach(item => {
+
+                const row = columns.map(column =>
+                    escapeCSV(item[column])
+                );
+
+                rows.push(row.join(','));
+            });
+
+            const csvContent = '\uFEFF' + rows.join('\r\n');
+
+            const blob = new Blob(
+                [csvContent],
+                { type: 'text/csv;charset=utf-8;' }
+            );
+
+            const url = URL.createObjectURL(blob);
+
+            const link = document.createElement('a');
+
+            link.href = url;
+            link.download = 'PowerShell_Data.csv';
+
+            document.body.appendChild(link);
+
+            link.click();
+
+            document.body.removeChild(link);
+
+            URL.revokeObjectURL(url);
+        }
+
+        // Export data to XLSX
+        function exportXLSX() {
+
+            if (receivedData.length === 0) {
+                alert('No data available to export.');
+                return;
+            }
+
+            const preferredOrder = [
+                'Application',
+                'Version',
+                'Publisher',
+                'InstallDate',
+                'InstallLocation'
+            ];
+
+            const columns = [
+                ...new Set(receivedData.flatMap(item => Object.keys(item)))
+            ].sort((a, b) => {
+
+                const indexA = preferredOrder.indexOf(a);
+                const indexB = preferredOrder.indexOf(b);
+
+                return (indexA === -1 ? Infinity : indexA) -
+                       (indexB === -1 ? Infinity : indexB);
+            });
+
+            const worksheetData = [
+                columns,
+                ...receivedData.map(item =>
+                    columns.map(column => item[column] ?? '')
+                )
+            ];
+
+            const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+
+            const workbook = XLSX.utils.book_new();
+
+            XLSX.utils.book_append_sheet(
+                workbook,
+                worksheet,
+                'PowerShell Data'
+            );
+
+            XLSX.writeFile(workbook, 'PowerShell_Data.xlsx');
+        }
+		
+		// Clear all data
+		async function clearData() {
+
+			if (!confirm('Are you sure you want to clear all data?')) {
+				return;
+			}
+
+			try {
+
+				const response = await fetch('/clear', {
+					method: 'POST'
+				});
+
+				if (!response.ok) {
+					throw new Error(`HTTP error: ${response.status}`);
+				}
+
+				receivedData = [];
+
+				document.getElementById('tableHead').innerHTML = '';
+				document.getElementById('tableBody').innerHTML = '';
+
+				document.getElementById('status').textContent =
+					'Connected | 0 records | Data cleared';
+
+			} catch (error) {
+
+				console.error('Error clearing data:', error);
+
+				alert('Unable to clear data.');
+
+			}
+		}
+
+        // Refresh every 2 seconds
+        setInterval(getData, 2000);
+
+        // Initial data retrieval
+        getData();
+
+    </script>
+
+</body>
+</html>
